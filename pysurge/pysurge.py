@@ -1,7 +1,9 @@
 import logging
 import multiprocessing
+import os
 import queue
 import signal
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -128,7 +130,9 @@ class TestRunner:
 
         try:
             test = self.test_cls(**self.test_cls_kwargs)
+            log.debug("test '%s' in setup()", test.description)
             test.setup()
+            log.debug("test '%s' in run()", test.description)
             test.run()
 
             with self._lock:
@@ -136,7 +140,11 @@ class TestRunner:
                     if metric not in self.metrics:
                         self.metrics[metric] = []
                     self.metrics[metric].append(value)
+                    log.debug(
+                        "test '%s' storing metric '%s' value '%f'", test.description, metric, value
+                    )
                 self.successes += 1
+                log.debug("test '%s' passed", test.description)
         except Exception as exc:
             log.error("test '%s' hit error: %s", test.description, str(exc))
             with self._lock:
@@ -145,6 +153,7 @@ class TestRunner:
                 raise
         finally:
             try:
+                log.debug("test '%s' in teardown()", test.description)
                 test.teardown()
             except Exception as exc:
                 log.exception("test '%s' hit error in teardown: %s", test.description, str(exc))
@@ -216,6 +225,7 @@ class ChildProcess(multiprocessing.Process):
     def _test_cls_shutdown(test_cls):
         """Run shutdown for a test_cls and log any exception."""
         try:
+            log.debug("test class %s calling shutdown()", test_cls.__name__)
             test_cls.shutdown()
             return True
         except Exception:
@@ -226,6 +236,7 @@ class ChildProcess(multiprocessing.Process):
     def _test_cls_startup(test_cls):
         """Run the startup for a test_cls and log any exception."""
         try:
+            log.debug("test class %s calling startup()", test_cls.__name__)
             test_cls.startup()
             return True
         except Exception:
@@ -359,6 +370,9 @@ class Manager:
         self.duration = duration
         self.debug = debug
 
+        # Append cwd to sys.path so we can load adhoc test classes
+        sys.path.insert(0, os.getcwd())
+
         # Map the test class string in the config into an actual imported class
         for test in self.config["tests"]:
             test_cls = test["test_class"]
@@ -366,6 +380,9 @@ class Manager:
             if not imported_cls:
                 raise ValueError(f"Unable to import test class '{test_cls}'")
             test["test_class"] = imported_cls
+
+        # Remove freshly added cwd from path
+        sys.path.pop(0)
 
     def _aggregate_results(self, results):
         """Take the results returned by each proc and aggregate."""

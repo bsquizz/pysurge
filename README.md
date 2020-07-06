@@ -2,6 +2,18 @@
 
 `pysurge` is a python-based tool that allows you to write performance tests in python quickly and easily.
 
+### Example
+
+See the [example](example) in this project to see how a simple HTTP load test can be quickly configured and executed.
+
+### Installation
+
+This project is available on pypi:
+
+```
+pip install pysurge
+```
+
 ### Performance tests... in Python?
 
 Yes, Python has its limitations when it comes to concurrency and scale. However, sometimes you don't need more scale than what Python can deliver. This is especially true when testing cloud-based applications that "scale out" (i.e., spin up more replicas when demand increases). Load testing can be done at lower scale against a single replica and results can be extrapolated.
@@ -103,8 +115,3 @@ A metric called `upload->db_time_in_sec` was stored every time the test fired. T
 * Very large scale tests
 * Distributed load testing (orchestrating and firing tests across multiple hosts)
 * Advanced reporting
-
-
-### Examples
-
-See the [example](example) in this project to see how a simple HTTP load test can be configured and executed.
