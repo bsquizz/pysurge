@@ -25,7 +25,7 @@ def main(config, duration, debug):
 
     config_data = load_config(click.format_filename(config))
     if duration:
-        log.info("Running for %d minutes...")
+        log.info("Running for %d minutes...", duration)
     else:
         log.info("Running indefinitely...")
     log.info("Hit CTRL+C to trigger end of run")
