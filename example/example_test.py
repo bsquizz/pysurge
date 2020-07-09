@@ -39,6 +39,11 @@ class ExampleTest(TestCase):
         # "unique identifiers" in the test to help when analyzing logs.
         return f"example test: request id {self.request_id}"
 
+    @property
+    def max_duration(self):
+        # How long we think each worker should take at a maximum
+        return 180
+
     def setup(self):
         pass
 

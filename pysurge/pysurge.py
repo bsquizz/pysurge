@@ -80,6 +80,11 @@ class TestCase:
         """
         raise NotImplementedError
 
+    @property
+    def max_duration(self):
+        """Sets the max duration for each worker per thread"""
+        raise NotImplementedError
+
     def setup(self):
         """Defines setup for a single execution of this test."""
         raise NotImplementedError
@@ -118,6 +123,18 @@ class TestRunner:
         self.test_run_time = 0
         self.metrics = {}
         self.debug = debug
+        self._validate_test_cls()
+
+    def _validate_test_cls(self):
+        instance = self.test_cls(**self.test_cls_kwargs)
+
+        try:
+            instance.max_duration
+        except NotImplementedError:
+            raise AttributeError(
+                f"{type(self.test_cls)} {self.test_cls.__name__} must have max_duration property "
+                "defined"
+            )
 
     @property
     def running(self):
@@ -178,7 +195,7 @@ class TestRunner:
         start_time = time.time()
 
         rate_of_fire = 1.0 / self.rate
-        max_duration = 180
+        max_duration = self.test_cls.max_duration
         workers = rate_of_fire * max_duration
 
         executor = ThreadPoolExecutor(max_workers=workers)
@@ -304,25 +321,32 @@ class ChildProcess(multiprocessing.Process):
         """
         signal.signal(signal.SIGINT, signal.SIG_IGN)  # worker procs ignore sigint
 
-        # Run startup once per test class
-        for test_config in self.config["tests"]:
-            test_cls = test_config["test_class"]
-            if test_cls not in self.startup_attempted:
-                if self._test_cls_startup(test_cls):
-                    self.startup_successful.append(test_cls)
-                self.startup_attempted.append(test_cls)
+        try:
+            # Run startup once per test class
+            for test_config in self.config["tests"]:
+                test_cls = test_config["test_class"]
+                if test_cls not in self.startup_attempted:
+                    if self._test_cls_startup(test_cls):
+                        self.startup_successful.append(test_cls)
+                    self.startup_attempted.append(test_cls)
 
-        total_rate_this_proc = 0.0
+            total_rate_this_proc = 0.0
 
-        # Run only the test classes that passed startup successfully
-        for test_config in self.config["tests"]:
-            rate_per_proc = test_config["rate"] / self.processors
-            test_cls = test_config["test_class"]
-            test_kwargs = test_config.get("kwargs", {})
-            if test_cls in self.startup_successful:
-                pt = TestRunner(test_cls, test_kwargs, rate_per_proc, self.debug)
-                self.perf_testers.append(pt)
-                total_rate_this_proc += pt.rate
+            # Run only the test classes that passed startup successfully
+            for test_config in self.config["tests"]:
+                rate_per_proc = test_config["rate"] / self.processors
+                test_cls = test_config["test_class"]
+                test_kwargs = test_config.get("kwargs", {})
+                if test_cls in self.startup_successful:
+                    pt = TestRunner(test_cls, test_kwargs, rate_per_proc, self.debug)
+                    self.perf_testers.append(pt)
+                    total_rate_this_proc += pt.rate
+        except Exception:
+            log.exception("Hit error during startup")
+            self.result_queue.put("STARTUP_FAILED")
+            time.sleep(0.5)
+
+            return
 
         log.info("Sending 'startup done' to main proc and waiting for it to tell me to start...")
         self.result_queue.put("STARTUP_DONE")
@@ -480,11 +504,13 @@ class Manager:
         while len(results) < len(self.child_procs):
             try:
                 result = self.result_queue.get(block=False)
-                if result != "STARTUP_DONE":
+                if result == "STARTUP_FAILED":
+                    raise Exception("Startup for a child process failed")
+                elif result != "STARTUP_DONE":
                     raise Exception("Expected a STARTUP_DONE result, got something else")
                 results.append(result)
             except queue.Empty:
-                time.sleep(1)
+                time.sleep(.1)
 
         # Now trigger the actual run
         log.info("Starting...")
