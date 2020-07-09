@@ -48,7 +48,7 @@ class ExampleTest(TestCase):
 
     @property
     def max_duration(self):
-        # How long we think each worker should take at a maximum
+        # How long we think each test instance takes to run at a maximum
         return 180
 
     def setup(self):
