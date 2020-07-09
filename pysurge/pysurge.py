@@ -82,7 +82,7 @@ class TestCase:
 
     @property
     def max_duration(self):
-        """Sets the max duration for each worker per thread"""
+        """Returns the maximum time in sec that an instance of this test may take to run"""
         raise NotImplementedError
 
     def setup(self):
@@ -116,6 +116,7 @@ class TestRunner:
         self._lock = threading.Lock()
         self.test_cls = test_cls
         self.test_cls_kwargs = test_cls_kwargs
+        self.test_instance = test_cls(**test_cls_kwargs)
         self.rate = rate  # num tests per sec
         self.active_tests = 0
         self.successes = 0
@@ -123,18 +124,6 @@ class TestRunner:
         self.test_run_time = 0
         self.metrics = {}
         self.debug = debug
-        self._validate_test_cls()
-
-    def _validate_test_cls(self):
-        instance = self.test_cls(**self.test_cls_kwargs)
-
-        try:
-            instance.max_duration
-        except NotImplementedError:
-            raise AttributeError(
-                f"{type(self.test_cls)} {self.test_cls.__name__} must have max_duration property "
-                "defined"
-            )
 
     @property
     def running(self):
@@ -195,7 +184,7 @@ class TestRunner:
         start_time = time.time()
 
         rate_of_fire = 1.0 / self.rate
-        max_duration = self.test_cls.max_duration
+        max_duration = self.test_instance.max_duration
         workers = rate_of_fire * max_duration
 
         executor = ThreadPoolExecutor(max_workers=workers)
@@ -295,7 +284,7 @@ class ChildProcess(multiprocessing.Process):
         results = []
         for pt in self.perf_testers:
             # Instantiate the test class w/ kwargs so we can get the unique name/summary properties
-            test = pt.test_cls(**pt.test_cls_kwargs)
+            test = pt.test_instance
             test_name = f"{str(test)} -- {test.summary}"
             results.append(
                 {
@@ -306,6 +295,29 @@ class ChildProcess(multiprocessing.Process):
                 }
             )
         self.result_queue.put(results)
+
+    def _init_test_runners(self):
+        # Run startup once per test class
+        for test_config in self.config["tests"]:
+            test_cls = test_config["test_class"]
+            if test_cls not in self.startup_attempted:
+                if self._test_cls_startup(test_cls):
+                    self.startup_successful.append(test_cls)
+                self.startup_attempted.append(test_cls)
+
+        total_rate_this_proc = 0.0
+
+        # Run only the test classes that passed startup successfully
+        for test_config in self.config["tests"]:
+            rate_per_proc = test_config["rate"] / self.processors
+            test_cls = test_config["test_class"]
+            test_kwargs = test_config.get("kwargs", {})
+            if test_cls in self.startup_successful:
+                pt = TestRunner(test_cls, test_kwargs, rate_per_proc, self.debug)
+                self.perf_testers.append(pt)
+                total_rate_this_proc += pt.rate
+
+        return total_rate_this_proc
 
     def run(self):
         """
@@ -322,30 +334,10 @@ class ChildProcess(multiprocessing.Process):
         signal.signal(signal.SIGINT, signal.SIG_IGN)  # worker procs ignore sigint
 
         try:
-            # Run startup once per test class
-            for test_config in self.config["tests"]:
-                test_cls = test_config["test_class"]
-                if test_cls not in self.startup_attempted:
-                    if self._test_cls_startup(test_cls):
-                        self.startup_successful.append(test_cls)
-                    self.startup_attempted.append(test_cls)
-
-            total_rate_this_proc = 0.0
-
-            # Run only the test classes that passed startup successfully
-            for test_config in self.config["tests"]:
-                rate_per_proc = test_config["rate"] / self.processors
-                test_cls = test_config["test_class"]
-                test_kwargs = test_config.get("kwargs", {})
-                if test_cls in self.startup_successful:
-                    pt = TestRunner(test_cls, test_kwargs, rate_per_proc, self.debug)
-                    self.perf_testers.append(pt)
-                    total_rate_this_proc += pt.rate
+            total_rate_this_proc = self._init_test_runners()
         except Exception:
-            log.exception("Hit error during startup")
+            log.exception("Child process hit error during startup")
             self.result_queue.put("STARTUP_FAILED")
-            time.sleep(0.5)
-
             return
 
         log.info("Sending 'startup done' to main proc and waiting for it to tell me to start...")
@@ -382,6 +374,17 @@ class ChildProcess(multiprocessing.Process):
 class Manager:
     """Handles running multiple TestRunners, splitting them across ChildProcesses."""
 
+    @staticmethod
+    def _validate_test_cls(test_cls, test_cls_kwargs):
+        instance = test_cls(**test_cls_kwargs)
+
+        try:
+            instance.max_duration
+        except NotImplementedError:
+            raise AttributeError(
+                f"{type(instance)} must have max_duration property defined"
+            ) from None  # avoid printing the original chained error
+
     def __init__(self, config, duration, debug=False):
         # TODO: real config management
         self.config = config
@@ -398,12 +401,15 @@ class Manager:
         sys.path.insert(0, os.getcwd())
 
         # Map the test class string in the config into an actual imported class
+        log.info("Validating test classes...")
         for test in self.config["tests"]:
             test_cls = test["test_class"]
+            test_cls_kwargs = test.get("kwargs", {})
             imported_cls = locate(test_cls)
             if not imported_cls:
                 raise ValueError(f"Unable to import test class '{test_cls}'")
             test["test_class"] = imported_cls
+            self._validate_test_cls(imported_cls, test_cls_kwargs)
 
         # Remove freshly added cwd from path
         sys.path.pop(0)
@@ -501,16 +507,22 @@ class Manager:
         # wait for the 'startup' to finish
         results = []
         log.info("Waiting to receive 'startup done' from child procs...")
+        failed = False
         while len(results) < len(self.child_procs):
             try:
                 result = self.result_queue.get(block=False)
                 if result == "STARTUP_FAILED":
-                    raise Exception("Startup for a child process failed")
+                    log.debug("Startup for a child process failed")
+                    failed = True
                 elif result != "STARTUP_DONE":
-                    raise Exception("Expected a STARTUP_DONE result, got something else")
+                    log.debug("Expected a STARTUP_DONE result, got something else")
+                    failed = True
                 results.append(result)
             except queue.Empty:
-                time.sleep(.1)
+                time.sleep(0.1)
+
+        if failed:
+            raise Exception("Startup of child processes failed")
 
         # Now trigger the actual run
         log.info("Starting...")
