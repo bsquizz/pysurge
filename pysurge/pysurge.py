@@ -183,12 +183,14 @@ class TestRunner:
         """Handles the continuous loop to submit tests to the thread pool executor."""
         start_time = time.time()
 
-        rate_of_fire = 1.0 / self.rate
         max_duration = self.test_instance.max_duration
-        workers = rate_of_fire * max_duration
+        # Based on Little's Law
+        # Max number of concurrent tests = (num tests fired/sec) * (max duration in sec of test)
+        workers = self.rate * max_duration
 
         executor = ThreadPoolExecutor(max_workers=workers)
 
+        rate_of_fire = 1.0 / self.rate  # 1 test fired every 'rate_of_fire' seconds
         while not self._stop.is_set():
             executor.submit(self._test_runner)
             time.sleep(rate_of_fire)
