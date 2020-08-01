@@ -191,8 +191,16 @@ class TestRunner:
         executor = ThreadPoolExecutor(max_workers=workers)
 
         rate_of_fire = 1.0 / self.rate  # 1 test fired every 'rate_of_fire' seconds
+
         while not self._stop.is_set():
-            executor.submit(self._test_runner)
+            try:
+                executor.submit(self._test_runner)
+            except RuntimeError as err:
+                if str(err) == "can't start new thread":
+                    log.error("unable to start new thread! desired rate won't be achieved")
+                else:
+                    raise
+
             time.sleep(rate_of_fire)
 
         executor.shutdown()
