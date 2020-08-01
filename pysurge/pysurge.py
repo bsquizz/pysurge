@@ -188,14 +188,10 @@ class TestRunner:
         workers = rate_of_fire * max_duration
 
         executor = ThreadPoolExecutor(max_workers=workers)
-        last_submit_time = 0.0
 
         while not self._stop.is_set():
-            if time.time() - last_submit_time >= rate_of_fire:
-                last_submit_time = time.time()
-                executor.submit(self._test_runner)
-            # Sleep for short durations so we can quickly catch the _stop flag being set
-            time.sleep(0.1)
+            executor.submit(self._test_runner)
+            time.sleep(rate_of_fire)
 
         executor.shutdown()
 
