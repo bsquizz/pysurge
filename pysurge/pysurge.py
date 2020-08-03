@@ -196,7 +196,7 @@ class TestRunner:
             try:
                 executor.submit(self._test_runner)
             except RuntimeError as err:
-                if str(err) == "can't start new thread":
+                if "can't start new thread" in str(err):
                     log.error("unable to start new thread! desired rate won't be achieved")
                 else:
                     raise
