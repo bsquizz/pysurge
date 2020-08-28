@@ -1,6 +1,7 @@
 # `pysurge`
 
-Have existing Python code? Want to use it to set up some simple performance tests quickly? Try `pysurge`, a python-based tool that allows you to quickly write simple performance tests in python.
+Write simple performance tests using Python with `pysurge`
+
 
 ### Example
 
